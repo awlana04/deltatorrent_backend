@@ -1,0 +1,25 @@
+# Pastas de compilação do Java (Onde o Maven gera o código compilado)
+target/
+
+# Arquivos binários e empacotados
+*.class
+*.jar
+*.war
+*.ear
+
+# Logs de execução e logs do sistema
+*.log
+.docker/
+
+# Configurações locais das IDEs e Editores (IntelliJ, Eclipse, VS Code e Zed)
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.vscode/
+.zed/settings.json
+
+# Arquivos temporários do Sistema Operacional (Linux/Mac/Windows)
+.DS_Store
+Thumbs.db
