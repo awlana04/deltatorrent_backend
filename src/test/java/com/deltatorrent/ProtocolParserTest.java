@@ -1,8 +1,7 @@
 package com.deltatorrent;
 
-import junit.framework.TestCase;
-
 import com.deltatorrent.utils.ProtocolParser;
+import junit.framework.TestCase;
 
 public class ProtocolParserTest extends TestCase {
   private ProtocolParser parser;
