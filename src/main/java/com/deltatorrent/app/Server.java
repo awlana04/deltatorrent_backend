@@ -1,7 +1,7 @@
 package com.deltatorrent.app;
 
 import com.deltatorrent.handlers.ClientHandler;
-import com.deltatorrent.utils.ProtocolParser
+import com.deltatorrent.utils.ProtocolParser;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
@@ -17,18 +17,22 @@ public class Server {
     System.out.println("=== SERVER EXECUTING ===");
     System.out.println("Listening to the port: " + PORT);
 
-    Thread heartbeatChecker = new Thread(() -> {
-      while (true) {
-        try {
-          Thread.sleep(15000);
-          System.out.println("[HEARTBEAT] Executando rotina automática de limpeza de nós mortos...");
-          // Perform a scan by iterating through the active sockets
-          // If a client fails to respond or the socket is broken, the parser removes its references
-        } catch (InterruptedException e) {
-          break;
-        }
-      }
-    });
+    Thread heartbeatChecker =
+        new Thread(
+            () -> {
+              while (true) {
+                try {
+                  Thread.sleep(15000);
+                  System.out.println(
+                      "[HEARTBEAT] Executando rotina automática de limpeza de nós mortos...");
+                  // Perform a scan by iterating through the active sockets
+                  // If a client fails to respond or the socket is broken, the parser removes its
+                  // references
+                } catch (InterruptedException e) {
+                  break;
+                }
+              }
+            });
 
     // Assures the Thread die if the main server closes
     heartbeatChecker.setDaemon(true);

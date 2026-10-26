@@ -20,7 +20,8 @@ public class ProtocolParser {
       return "ERROR|Empty message";
     }
 
-    String[] parts = rawMessage.split("\\\\|");
+    // String[] parts = rawMessage.split("\\\\|");
+    String[] parts = rawMessage.split(java.util.regex.Pattern.quote("|"));
     String action = parts[0];
 
     if (action.equalsIgnoreCase("REGISTER")) {
@@ -89,7 +90,7 @@ public class ProtocolParser {
       }
 
       long fileSize = nodesFound.get(0).getTotalSize();
-      long totalNecessarySlices = (long) Math.ceil((double) fileSize / SLICES_SIZE);
+      int totalSlices = (int) Math.ceil((double) fileSize / SLICES_SIZE);
       long seeds = nodesFound.stream().filter(RegisterFile::checkIsSeed).count();
       long peers = nodesFound.stream().filter(n -> !n.checkIsSeed()).count();
 
@@ -145,7 +146,7 @@ public class ProtocolParser {
           + "|PEERS:"
           + peers
           + "|CHUNKS:"
-          + totalNecessarySlices
+          + totalSlices
           + "|SIZE:"
           + fileSize;
     }

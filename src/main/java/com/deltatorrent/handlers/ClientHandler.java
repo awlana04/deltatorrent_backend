@@ -8,9 +8,11 @@ import java.net.Socket;
 
 public class ClientHandler implements Runnable {
   private final Socket clientSocket;
+  private final ProtocolParser parser;
 
-  public ClientHandler(Socket socket) {
+  public ClientHandler(Socket socket, ProtocolParser parser) {
     this.clientSocket = socket;
+    this.parser = parser;
   }
 
   @Override
