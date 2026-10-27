@@ -6,80 +6,137 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ProtocolParser {
-  // To avoid errors during the update of the data
-  // It allows to many threads update the list faster and safely
   private static final ConcurrentHashMap<String, List<RegisterFile>> files =
       new ConcurrentHashMap<>();
-  // Chocking
   private static final ConcurrentHashMap<String, Integer> uploadHistory = new ConcurrentHashMap<>();
-  // 512 KB
-  private static final long SLICES_SIZE = 524288;
+  private static final long SLICES_SIZE = 524288L;
 
   public String treat(String rawMessage) {
     if (rawMessage == null || rawMessage.trim().isEmpty()) {
       return "ERROR|Empty message";
     }
 
-    // String[] parts = rawMessage.split("\\\\|");
-    String[] parts = rawMessage.split(java.util.regex.Pattern.quote("|"));
-    String action = parts[0];
+    String[] parts = rawMessage.split(java.util.regex.Pattern.quote("|"), -1);
+
+    String action = parts[0].trim();
 
     if (action.equalsIgnoreCase("REGISTER")) {
-      // REGISTER|file_name|total_size|ip|port|STATUS(SEED/PEER)|[optinal_slices]
-      String fileName = parts[1];
-      long totalSize = Long.parseLong(parts[2]);
-      String ip = parts[3];
-      int port = Integer.parseInt(parts[4]);
-      String status = parts[5];
-
-      List<RegisterFile> nodes = files.computeIfAbsent(fileName, k -> new ArrayList<>());
-
-      // Searchs if a node already exists, if not creates a new one
-      RegisterFile register =
-          nodes.stream()
-              .filter(n -> n.getAddress().equals(ip + ":" + port))
-              .findFirst()
-              .orElse(null);
-
-      if (register == null) {
-        register = new RegisterFile(fileName, totalSize, ip, port);
-        nodes.add(register);
+      if (parts.length < 6) {
+        return "ERROR|Invalid REGISTER format";
       }
 
-      if (status.equalsIgnoreCase("SEED")) {
-        register.setIsSeed(true);
-        // If the IP already exists, plus 5, if not it starts with 5 then
-        uploadHistory.merge(ip, 5, Integer::sum);
-      } else {
-        uploadHistory.merge(ip, 1, Integer::sum);
-        // If is a PEER, the command sends which slices it already has
-        if (parts.length > 6) {
-          String[] indexes = parts[6].split(";");
+      String fileName = parts[1].trim();
 
-          for (String idx : indexes) {
-            if (!idx.isEmpty()) {
-              register.addSlice(Integer.parseInt(idx));
+      if (fileName.isEmpty()) {
+        return "ERROR|Empty file name";
+      }
+
+      long totalSize;
+      int port;
+
+      try {
+        totalSize = Long.parseLong(parts[2].trim());
+        port = Integer.parseInt(parts[4].trim());
+      } catch (NumberFormatException e) {
+        return "ERROR|Invalid size or port";
+      }
+
+      String ip = parts[3].trim();
+      String status = parts[5].trim();
+
+      if (totalSize < 0 || ip.isEmpty() || port < 1 || port > 65535) {
+        return "ERROR|Invalid registration information";
+      }
+
+      if (!status.equalsIgnoreCase("SEED") && !status.equalsIgnoreCase("PEER")) {
+        return "ERROR|Invalid peer status";
+      }
+
+      // Atualiza os peers de forma sincronizada por arquivo.
+      List<RegisterFile> nodes = files.computeIfAbsent(fileName, key -> new ArrayList<>());
+
+      synchronized (nodes) {
+        // Procura o mesmo peer pelo endereço IP:porta.
+        RegisterFile register =
+            nodes.stream()
+                .filter(node -> node.getAddress().equals(ip + ":" + port))
+                .findFirst()
+                .orElse(null);
+
+        if (register == null) {
+          register = new RegisterFile(fileName, totalSize, ip, port);
+
+          nodes.add(register);
+        }
+
+        if (status.equalsIgnoreCase("SEED")) {
+          register.setIsSeed(true);
+
+          // O seed possui todas as fatias.
+          uploadHistory.merge(ip, 5, Integer::sum);
+
+        } else {
+          uploadHistory.merge(ip, 1, Integer::sum);
+
+          // Registra as fatias que o peer já possui.
+          if (parts.length > 6 && !parts[6].isBlank()) {
+            String[] indexes = parts[6].split(";");
+
+            for (String index : indexes) {
+              if (index.isBlank()) {
+                continue;
+              }
+
+              try {
+                int sliceIndex = Integer.parseInt(index.trim());
+
+                if (sliceIndex >= 0) {
+                  register.addSlice(sliceIndex);
+                }
+              } catch (NumberFormatException e) {
+                return "ERROR|Invalid slice index";
+              }
             }
           }
         }
       }
 
+      System.out.println(
+          "[TRACKER] Registered " + fileName + " at " + ip + ":" + port + " as " + status);
+
       return "REGISTER_OK";
     }
 
-    // SEARCH|file_name|wanted_slice_index
     if (action.equalsIgnoreCase("SEARCH")) {
-      String searchTerm = parts[1];
-      int sliceWanted = (parts.length > 2) ? Integer.parseInt(parts[2]) : -1;
-      // Recover the IP's node which is recovering a search
-      String ipRequest = (parts.length > 3) ? parts[3] : "UNKNOWN";
-      int score = uploadHistory.getOrDefault(ipRequest, 0);
+
+      if (parts.length < 2 || parts[1].trim().isEmpty()) {
+        return "ERROR|Invalid SEARCH format";
+      }
+
+      String searchTerm = parts[1].trim();
+
+      int sliceWanted = -1;
+
+      try {
+        if (parts.length > 2 && !parts[2].isBlank()) {
+          sliceWanted = Integer.parseInt(parts[2].trim());
+        }
+      } catch (NumberFormatException e) {
+        return "ERROR|Invalid slice index";
+      }
+
+      if (sliceWanted < -1) {
+        return "ERROR|Invalid slice index";
+      }
+
+      String requesterIP = parts.length > 3 && !parts[3].isBlank() ? parts[3].trim() : "UNKNOWN";
+
+      int score = uploadHistory.getOrDefault(requesterIP, 0);
+
       String answerPrefix = "RESULTS|";
 
-      // If the node already download on the network but there's a zero score of uploads, it
-      // receives a choke
-      if (!ipRequest.equals("UNKNOWN") && score == 0) {
-        // Instruction HOLD of 3000ms
+      // Mantém a lógica de choking existente.
+      if (!requesterIP.equals("UNKNOWN") && score == 0) {
         answerPrefix = "HOLD|3000|RESULTS|";
       }
 
@@ -89,37 +146,112 @@ public class ProtocolParser {
         return "RESULTS|NONE|SEEDS:0|PEERS:0";
       }
 
-      long fileSize = nodesFound.get(0).getTotalSize();
-      int totalSlices = (int) Math.ceil((double) fileSize / SLICES_SIZE);
-      long seeds = nodesFound.stream().filter(RegisterFile::checkIsSeed).count();
-      long peers = nodesFound.stream().filter(n -> !n.checkIsSeed()).count();
+      synchronized (nodesFound) {
+        if (nodesFound.isEmpty()) {
+          return "RESULTS|NONE|SEEDS:0|PEERS:0";
+        }
 
-      if (sliceWanted == -1) {
-        int[] abundance = new int[totalSlices];
+        long fileSize = nodesFound.get(0).getTotalSize();
 
-        // Scan the swarm, counting how many nodes each of the pieces contains.
-        for (RegisterFile node : nodesFound) {
-          if (node.checkIsSeed()) {
-            for (int i = 0; i < totalSlices; i++) {
-              abundance[i]++;
-            }
-          } else {
-            for (int i = 0; i < totalSlices; i++) {
-              if (node.hasSlice(i)) {
+        int totalSlices = (int) (fileSize / SLICES_SIZE + (fileSize % SLICES_SIZE == 0 ? 0 : 1));
+
+        long seeds = nodesFound.stream().filter(RegisterFile::checkIsSeed).count();
+
+        long peers = nodesFound.stream().filter(node -> !node.checkIsSeed()).count();
+
+        if (sliceWanted == -1) {
+
+          int[] abundance = new int[totalSlices];
+
+          for (RegisterFile node : nodesFound) {
+            if (node.checkIsSeed()) {
+              for (int i = 0; i < totalSlices; i++) {
                 abundance[i]++;
+              }
+            } else {
+              for (int i = 0; i < totalSlices; i++) {
+                if (node.hasSlice(i)) {
+                  abundance[i]++;
+                }
               }
             }
           }
+
+          List<String> rarityMap = new ArrayList<>();
+
+          for (int i = 0; i < totalSlices; i++) {
+            rarityMap.add(i + ":" + abundance[i]);
+          }
+
+          // O FileLeecher atual baixa o arquivo inteiro
+          // de um único peer. Por isso, selecionamos um seed.
+          RegisterFile owner =
+              nodesFound.stream().filter(RegisterFile::checkIsSeed).findFirst().orElse(null);
+
+          StringBuilder response = new StringBuilder();
+
+          response
+              .append("RAREST_MAP|")
+              .append(String.join(";", rarityMap))
+              .append("|SEEDS:")
+              .append(seeds)
+              .append("|PEERS:")
+              .append(peers)
+              .append("|CHUNKS:")
+              .append(totalSlices)
+              .append("|SIZE:")
+              .append(fileSize);
+
+          if (owner != null) {
+            String address = owner.getAddress();
+            int separator = address.lastIndexOf(':');
+
+            if (separator <= 0 || separator == address.length() - 1) {
+              return "ERROR|Invalid peer address";
+            }
+
+            String ownerIP = address.substring(0, separator);
+
+            int ownerPort;
+
+            try {
+              ownerPort = Integer.parseInt(address.substring(separator + 1));
+            } catch (NumberFormatException e) {
+              return "ERROR|Invalid peer port";
+            }
+
+            if (ownerPort < 1 || ownerPort > 65535) {
+              return "ERROR|Invalid peer port";
+            }
+
+            response.append("|OWNER_IP:").append(ownerIP).append("|OWNER_PORT:").append(ownerPort);
+          }
+
+          return response.toString();
         }
 
-        List<String> rarityMap = new ArrayList<>();
-
-        for (int i = 0; i < totalSlices; i++) {
-          rarityMap.add(i + ":" + abundance[i]);
+        if (sliceWanted >= totalSlices) {
+          return "RESULTS|NONE"
+              + "|SEEDS:"
+              + seeds
+              + "|PEERS:"
+              + peers
+              + "|CHUNKS:"
+              + totalSlices
+              + "|SIZE:"
+              + fileSize;
         }
 
-        return "RAREST_MAP|"
-            + String.join(";", rarityMap)
+        List<String> sliceOwnersFound = new ArrayList<>();
+
+        for (RegisterFile node : nodesFound) {
+          if (node.checkIsSeed() || node.hasSlice(sliceWanted)) {
+            sliceOwnersFound.add(node.getAddress());
+          }
+        }
+
+        return answerPrefix
+            + String.join(";", sliceOwnersFound)
             + "|SEEDS:"
             + seeds
             + "|PEERS:"
@@ -129,26 +261,6 @@ public class ProtocolParser {
             + "|SIZE:"
             + fileSize;
       }
-
-      List<String> sliceOwnersFound = new ArrayList<>();
-
-      for (RegisterFile node : nodesFound) {
-        // If is a generic search it returns everything, if is a slice, filters who owns the slice
-        if (sliceWanted == -1 || node.hasSlice(sliceWanted)) {
-          sliceOwnersFound.add(node.getAddress());
-        }
-      }
-
-      return answerPrefix
-          + String.join(";", sliceOwnersFound)
-          + "|SEEDS:"
-          + seeds
-          + "|PEERS:"
-          + peers
-          + "|CHUNKS:"
-          + totalSlices
-          + "|SIZE:"
-          + fileSize;
     }
 
     return "ERROR|Not a command";
